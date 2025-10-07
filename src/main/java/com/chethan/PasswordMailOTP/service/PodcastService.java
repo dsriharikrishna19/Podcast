@@ -124,7 +124,7 @@ public class PodcastService {
 
     public List<Podcast> searchPodcasts(String keyword) {
         if (keyword == null || keyword.isBlank()) {
-            return List.of(); // return empty list instead of null
+            return List.of(); 
         }
         return podcastRepo.search(keyword);
     }

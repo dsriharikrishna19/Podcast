@@ -20,7 +20,7 @@ public class UserService {
             return "Email already registered!";
         }
 
-        User user = new User(email, password, name, gender, phoneNumber); // You can hash the password here if needed
+        User user = new User(email, password, name, gender, phoneNumber); 
         userRepo.save(user);
         System.out.println(user);
         return "User registered successfully!";
