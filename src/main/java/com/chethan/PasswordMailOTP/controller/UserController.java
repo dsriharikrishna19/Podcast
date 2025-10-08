@@ -1,10 +1,16 @@
 package com.chethan.PasswordMailOTP.controller;
 
+import com.chethan.PasswordMailOTP.config.JwtTokenProvider;
+import com.chethan.PasswordMailOTP.dto.ApiResponse;
+import com.chethan.PasswordMailOTP.dto.JwtAuthResponse;
 import com.chethan.PasswordMailOTP.entity.User;
 import com.chethan.PasswordMailOTP.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Optional;
@@ -12,27 +18,69 @@ import java.util.Optional;
 @RestController
 public class UserController {
 
-    @Autowired
+@Autowired
     private UserService userService;
 
+    @Autowired
+    private AuthenticationManager authenticationManager;
+
+    @Autowired
+    private JwtTokenProvider tokenProvider;
+
     @PostMapping("/register")
-    public ResponseEntity<String> register(@RequestBody User user) {
-        String response = userService.registerUser(user.getEmail(), user.getPassword(), user.getName(), user.getGender(), user.getPhoneNumber());
-        System.out.println(response);
-        if (response.equals("User registered successfully!")) {
+    public ResponseEntity<ApiResponse> register(@RequestBody User userRequest) {
+        // Create a new user without ID to ensure it's auto-generated
+        User newUser = new User(
+            userRequest.getEmail(),
+            userRequest.getPassword(),
+            userRequest.getName(),
+            userRequest.getGender(),
+            userRequest.getPhoneNumber()
+        );
+        
+        ApiResponse response = userService.registerUser(
+            newUser.getEmail(),
+            newUser.getPassword(),
+            newUser.getName(),
+            newUser.getGender(),
+            newUser.getPhoneNumber()
+        );
+        
+        if (response.isSuccess()) {
             return ResponseEntity.ok(response);
         } else {
             return ResponseEntity.badRequest().body(response);
         }
     }
     @PostMapping("/login")
-    public ResponseEntity<String> login(@RequestBody User user) {
-        String response = userService.loginUser(user.getEmail(), user.getPassword());
-        if (response.startsWith("Login Successful")) {
-            return ResponseEntity.ok(response);
-        } else {
-            return ResponseEntity.status(401).body(response);
+    public ResponseEntity<?> login(@RequestBody User loginRequest) {
+        // Authenticate user
+        Authentication authentication = authenticationManager.authenticate(
+            new UsernamePasswordAuthenticationToken(
+                loginRequest.getEmail(),
+                loginRequest.getPassword()
+            )
+        );
+
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+
+        // Get user details
+        Optional<User> userOptional = userService.getUserByEmail(loginRequest.getEmail());
+        if (userOptional.isEmpty()) {
+            return ResponseEntity.badRequest().body("User not found");
         }
+
+        // Generate JWT token
+        String token = tokenProvider.generateToken(loginRequest.getEmail());
+        
+        // Create response
+        JwtAuthResponse response = JwtAuthResponse.builder()
+                .token(token)
+                .user(userOptional.get())
+                .message("Login successful")
+                .build();
+
+        return ResponseEntity.ok(response);
     }
     @PostMapping("/profile")
     public ResponseEntity<?> viewProfile(@RequestBody User requestUser){

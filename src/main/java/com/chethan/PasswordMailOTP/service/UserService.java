@@ -1,9 +1,11 @@
 package com.chethan.PasswordMailOTP.service;
 
 
+import com.chethan.PasswordMailOTP.dto.ApiResponse;
 import com.chethan.PasswordMailOTP.entity.User;
 import com.chethan.PasswordMailOTP.repository.UserRepo;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
@@ -14,31 +16,36 @@ public class UserService {
     @Autowired
     private UserRepo userRepo;
 
-    public String registerUser(String email, String password, String name, String gender, Long phoneNumber) {
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    public ApiResponse registerUser(String email, String password, String name, String gender, Long phoneNumber) {
         // Check if email already exists
         if (userRepo.findByEmail(email).isPresent()) {
-            return "Email already registered!";
+            return ApiResponse.error("Email already registered!");
         }
 
-        User user = new User(email, password, name, gender, phoneNumber); 
+        // Encode password before saving
+        String encodedPassword = passwordEncoder.encode(password);
+        User user = new User(email, encodedPassword, name, gender, phoneNumber); 
         userRepo.save(user);
         System.out.println(user);
-        return "User registered successfully!";
-
+        return ApiResponse.success("User registered successfully!", user);
     }
 
-    public String loginUser(String email, String password) {
+    public ApiResponse loginUser(String email, String password) {
         Optional<User> optionalUser = userRepo.findByEmail(email);
 
         if (optionalUser.isPresent()) {
             User user = optionalUser.get();
-            if (user.getPassword().equals(password)) {
-                return "Login Successful for: " + user.getEmail();
+            // Use passwordEncoder to match encoded password
+            if (passwordEncoder.matches(password, user.getPassword())) {
+                return ApiResponse.success("Login successful", user);
             } else {
-                return "Invalid Password";
+                return ApiResponse.error("Invalid password");
             }
         } else {
-            return "Need to Register";
+            return ApiResponse.error("User not found. Please register first.");
         }
     }
     public Optional<User> getUserByEmail(String email){
@@ -51,11 +58,8 @@ public class UserService {
             User user=optionalUser.get();
 
             if (updatedUser.getPassword() != null && !updatedUser.getPassword().isEmpty()) {
-                user.setPassword(updatedUser.getPassword());
-            }
-
-            if (updatedUser.getPassword() != null && !updatedUser.getPassword().isEmpty()) {
-                user.setPassword(updatedUser.getPassword());
+                // Encode password before updating
+                user.setPassword(passwordEncoder.encode(updatedUser.getPassword()));
             }
             if (updatedUser.getName() != null && !updatedUser.getName().isEmpty()) {
                 user.setName(updatedUser.getName());
