@@ -1,69 +1,159 @@
 package com.chethan.PasswordMailOTP.controller;
 
+import com.chethan.PasswordMailOTP.dto.ApiResponse;
 import com.chethan.PasswordMailOTP.entity.Podcast;
-import com.chethan.PasswordMailOTP.entity.User;
-import com.chethan.PasswordMailOTP.repository.PodcastRepo;
+import com.chethan.PasswordMailOTP.exception.ResourceNotFoundException;
 import com.chethan.PasswordMailOTP.service.PodcastService;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 @RestController
-@RequestMapping("/podcasts")
+@RequestMapping("/api/podcasts")
 public class PodcastController {
 
     @Autowired
     private PodcastService podcastService;
 
-    @Autowired
-    private PodcastRepo podcastRepo;
-
-
+    /**
+     * Get all podcasts with pagination
+     */
     @GetMapping
-    public ResponseEntity<List<Podcast>> getAllPodcasts(){
-        List<Podcast> podcasts = podcastService.getAllPodcasts();
-        return ResponseEntity.ok(podcasts);
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getAllPodcasts(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "title") String sortBy,
+            @RequestParam(defaultValue = "asc") String sortDir) {
+        
+        Sort sort = sortDir.equalsIgnoreCase(Sort.Direction.ASC.name()) 
+            ? Sort.by(sortBy).ascending() 
+            : Sort.by(sortBy).descending();
+            
+        Pageable pageable = PageRequest.of(page, size, sort);
+        Page<Podcast> podcastPage = podcastService.getAllPodcasts(pageable);
+        
+        Map<String, Object> response = new HashMap<>();
+        response.put("podcasts", podcastPage.getContent());
+        response.put("currentPage", podcastPage.getNumber());
+        response.put("totalItems", podcastPage.getTotalElements());
+        response.put("totalPages", podcastPage.getTotalPages());
+        
+        return ResponseEntity.ok(
+            ApiResponse.success("Podcasts retrieved successfully", response)
+        );
     }
 
+    /**
+     * Get podcast by ID
+     */
     @GetMapping("/{id}")
-    public ResponseEntity<?> getPodcastById(@PathVariable Long id){
-        Optional<Podcast> optional = podcastService.getPodcast(id);
-        return optional.map(ResponseEntity::ok).orElseGet(()->ResponseEntity.status(404).build());
+    public ResponseEntity<ApiResponse<Podcast>> getPodcastById(@PathVariable Long id) {
+        return podcastService.getPodcast(id)
+            .map(podcast -> ResponseEntity.ok(
+                ApiResponse.success("Podcast retrieved successfully", podcast)
+            ))
+            .orElseThrow(() -> new ResourceNotFoundException("Podcast not found with id: " + id));
     }
 
+    /**
+     * Fetch and save podcast from RSS URL
+     */
     @PostMapping("/fetch")
-    public ResponseEntity<?> fetchPodcast(@RequestBody Map<String, String> body){
+    public ResponseEntity<ApiResponse<Podcast>> fetchPodcast(
+            @Valid @RequestBody Map<@NotBlank String, @NotBlank String> body) {
+        
         String rssUrl = body.get("rssUrl");
-        if(rssUrl == null || rssUrl.isBlank()){
-            return  ResponseEntity.badRequest().body("RssUrl is Required in body");
+        if (rssUrl == null || rssUrl.isBlank()) {
+            return ResponseEntity.badRequest()
+                .body(ApiResponse.error("RSS URL is required in the request body"));
         }
-        Optional<Podcast> saved = podcastService.fetchAndSave(rssUrl);
-        return saved.map(ResponseEntity::ok).orElseGet(()->ResponseEntity.status(404).build());
+        
+        return podcastService.fetchAndSave(rssUrl)
+            .map(podcast -> ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.success("Podcast fetched and saved successfully", podcast)))
+            .orElse(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.error("Failed to fetch podcast from the provided RSS URL")));
     }
 
+    /**
+     * Search podcasts by keyword
+     */
     @GetMapping("/search")
-    public ResponseEntity<List<Podcast>> search(@RequestParam String keyword) {
-        List<Podcast> results = podcastService.searchPodcasts(keyword);
-        return ResponseEntity.ok(results);
+    public ResponseEntity<ApiResponse<Map<String, Object>>> searchPodcasts(
+            @RequestParam @NotBlank String keyword,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+                
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Podcast> results = podcastService.searchPodcasts(keyword, pageable);
+        
+        Map<String, Object> response = new HashMap<>();
+        response.put("results", results.getContent());
+        response.put("currentPage", results.getNumber());
+        response.put("totalItems", results.getTotalElements());
+        response.put("totalPages", results.getTotalPages());
+        
+        return ResponseEntity.ok(
+            ApiResponse.success("Search results retrieved successfully", response)
+        );
     }
 
-    @PostMapping("/play/{id}")
-    public ResponseEntity<?> playPodcast(@PathVariable Long id){
-        Optional<Podcast> viewPodcast = podcastService.incrementViews(id);
-        return viewPodcast
-                .map(ResponseEntity::ok)
-                .orElseGet(()->ResponseEntity.status(404).build());
+    /**
+     * Increment play count for a podcast
+     */
+    @PostMapping("/{id}/play")
+    public ResponseEntity<ApiResponse<Podcast>> playPodcast(@PathVariable Long id) {
+        return podcastService.incrementViews(id)
+            .map(podcast -> ResponseEntity.ok(
+                ApiResponse.success("Play count updated successfully", podcast)
+            ))
+            .orElseThrow(() -> new ResourceNotFoundException("Podcast not found with id: " + id));
     }
 
+    /**
+     * Get trending podcasts
+     */
     @GetMapping("/trending")
-    public ResponseEntity<List<Podcast>> getTrendingPodcast(){
-        List<Podcast> trending = podcastRepo.findTop10ByOrderByViewsDesc();
-        return ResponseEntity.ok(trending);
+    public ResponseEntity<ApiResponse<List<Podcast>>> getTrendingPodcasts(
+            @RequestParam(defaultValue = "10") int limit) {
+                
+        List<Podcast> trending = podcastService.getTrendingPodcasts(limit);
+        return ResponseEntity.ok(
+            ApiResponse.success("Trending podcasts retrieved successfully", trending)
+        );
+    }
+    
+    /**
+     * Get podcasts by category
+     */
+    @GetMapping("/category/{category}")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getPodcastsByCategory(
+            @PathVariable String category,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+                
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Podcast> podcasts = podcastService.getPodcastsByCategory(category, pageable);
+        
+        Map<String, Object> response = new HashMap<>();
+        response.put("podcasts", podcasts.getContent());
+        response.put("currentPage", podcasts.getNumber());
+        response.put("totalItems", podcasts.getTotalElements());
+        response.put("totalPages", podcasts.getTotalPages());
+        
+        return ResponseEntity.ok(
+            ApiResponse.success("Podcasts retrieved by category successfully", response)
+        );
     }
 }

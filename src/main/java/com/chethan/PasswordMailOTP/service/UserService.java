@@ -19,33 +19,75 @@ public class UserService {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
-    public ApiResponse registerUser(String email, String password, String name, String gender, Long phoneNumber) {
-        // Check if email already exists
-        if (userRepo.findByEmail(email).isPresent()) {
-            return ApiResponse.error("Email already registered!");
-        }
+    public ApiResponse registerUser(String email, String password, String name, String gender, String phoneNumber) {
+        try {
+            // Check if email already exists
+            if (userRepo.findByEmail(email).isPresent()) {
+                return ApiResponse.error("Email already registered. Please use a different email or try logging in.");
+            }
 
-        // Encode password before saving
-        String encodedPassword = passwordEncoder.encode(password);
-        User user = new User(email, encodedPassword, name, gender, phoneNumber); 
-        userRepo.save(user);
-        System.out.println(user);
-        return ApiResponse.success("User registered successfully!", user);
+            // Additional validations (as a backup to controller validations)
+            if (password.length() < 6) {
+                return ApiResponse.error("Password must be at least 6 characters long");
+            }
+            
+            if (phoneNumber == null || !phoneNumber.matches("^\\d{10}$")) {
+                return ApiResponse.error("Phone number must be 10 digits long");
+            }
+
+            // Encode password before saving
+            String encodedPassword = passwordEncoder.encode(password);
+            User user = new User(email, encodedPassword, name, gender, phoneNumber); 
+            
+            // Save user
+            User savedUser = userRepo.save(user);
+            
+            // Return success response with user details (excluding sensitive data)
+            savedUser.setPassword(null); // Don't return the password
+            return ApiResponse.success("Registration successful! Welcome " + name + ". You can now log in with your credentials.", savedUser);
+            
+        } catch (Exception e) {
+            // Log the error for debugging
+            e.printStackTrace();
+            return ApiResponse.error("Failed to register user. Please try again later. Error: " + e.getMessage());
+        }
     }
 
     public ApiResponse loginUser(String email, String password) {
-        Optional<User> optionalUser = userRepo.findByEmail(email);
-
-        if (optionalUser.isPresent()) {
-            User user = optionalUser.get();
-            // Use passwordEncoder to match encoded password
-            if (passwordEncoder.matches(password, user.getPassword())) {
-                return ApiResponse.success("Login successful", user);
-            } else {
-                return ApiResponse.error("Invalid password");
+        try {
+            if (email == null || email.trim().isEmpty()) {
+                return ApiResponse.error("Email is required");
             }
-        } else {
-            return ApiResponse.error("User not found. Please register first.");
+            
+            if (password == null || password.trim().isEmpty()) {
+                return ApiResponse.error("Password is required");
+            }
+            
+            Optional<User> optionalUser = userRepo.findByEmail(email.trim());
+            
+            if (optionalUser.isEmpty()) {
+                // Don't reveal that the user doesn't exist (security best practice)
+                return ApiResponse.error("Invalid email or password");
+            }
+            
+            User user = optionalUser.get();
+            
+            // Log the stored and input password hashes for debugging
+            System.out.println("Stored password hash: " + user.getPassword());
+            System.out.println("Input password: " + password);
+            
+            // Verify password
+            if (!passwordEncoder.matches(password, user.getPassword())) {
+                return ApiResponse.error("Invalid email or password");
+            }
+            
+            // Remove password before returning user data
+            user.setPassword(null);
+            return ApiResponse.success("Login successful", user);
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ApiResponse.error("An error occurred during login: " + e.getMessage());
         }
     }
     public Optional<User> getUserByEmail(String email){

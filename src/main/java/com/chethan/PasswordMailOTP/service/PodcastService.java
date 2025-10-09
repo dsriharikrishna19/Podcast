@@ -1,28 +1,28 @@
 package com.chethan.PasswordMailOTP.service;
 
-
 import com.chethan.PasswordMailOTP.entity.Podcast;
-import com.chethan.PasswordMailOTP.entity.User;
 import com.chethan.PasswordMailOTP.repository.PodcastRepo;
-import com.fasterxml.jackson.databind.util.JSONPObject;
-import com.rometools.rome.feed.synd.SyndEntry;
 import com.rometools.rome.feed.synd.SyndFeed;
 import com.rometools.rome.io.SyndFeedInput;
 import com.rometools.rome.io.XmlReader;
-import jakarta.transaction.Transactional;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.json.JSONObject;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 @Service
 public class PodcastService {
@@ -30,7 +30,20 @@ public class PodcastService {
     @Autowired
     private PodcastRepo podcastRepo;
 
-    public List<Podcast> getAllPodcasts() {
+    /**
+     * Get all podcasts with pagination support
+     * @param pageable pagination information (page number, page size, sorting)
+     * @return Page containing the list of podcasts and pagination information
+     */
+    public Page<Podcast> getAllPodcasts(Pageable pageable) {
+        return podcastRepo.findAll(pageable);
+    }
+    
+    /**
+     * Get all podcasts without pagination
+     * @return List of all podcasts
+     */
+    public List<Podcast> getAllPodcastsList() {
         return podcastRepo.findAll();
     }
 
@@ -38,17 +51,23 @@ public class PodcastService {
         return podcastRepo.findById(id);
     }
 
+    private boolean isYouTubeUrl(String url) {
+        return url != null && (url.contains("youtube.com") || url.contains("youtu.be"));
+    }
+
     @Transactional
     public Optional<Podcast> fetchAndSave(String url) {
-        if(url == null || url.isBlank())
+        if (url == null || url.isBlank()) {
             return Optional.empty();
+        }
+        
         try {
             Podcast podcast = podcastRepo.findByRssUrl(url).orElseGet(Podcast::new);
             podcast.setRssUrl(url);
             podcast.setLastUpdated(LocalDateTime.now());
 
             if (isYouTubeUrl(url)) {
-                // --- Handle YouTube link using oEmbed ---
+                // Handle YouTube link using oEmbed
                 podcast.setSourceType("YOUTUBE");
                 podcast.setCategory("YouTube");
                 JSONObject oembed = fetchYouTubeMetadata(url);
@@ -64,80 +83,113 @@ public class PodcastService {
                     podcast.setDescription("Embedded YouTube video");
                 }
             } else {
-                // --- Handle RSS feed ---
-                URL feedSource = new URL(url);
-
-                // Step 1: Read as plain text
-                String xml = new String(feedSource.openStream().readAllBytes(), StandardCharsets.UTF_8);
-
-                // Step 2: Remove <!DOCTYPE ...>
-                xml = xml.replaceAll("<!DOCTYPE[^>]*>", "");
-
-                // Step 3: Parse sanitized XML with Rome
-                SyndFeedInput input = new SyndFeedInput();
-                SyndFeed feed = input.build(new XmlReader(new URL(url)));
-
-
-                podcast.setSourceType("RSS");
-                podcast.setTitle(feed.getTitle());
-                podcast.setDescription(feed.getDescription());
-                podcast.setAuthor(feed.getAuthor());
-                podcast.setImageUrl(feed.getImage() != null ? feed.getImage().getUrl() : null);
-                if (feed.getCategories() != null && !feed.getCategories().isEmpty()) {
-                    podcast.setCategory(feed.getCategories().get(0).getName());
+                // Handle RSS feed
+                try {
+                    SyndFeedInput input = new SyndFeedInput();
+                    SyndFeed feed = input.build(new XmlReader(URI.create(url).toURL()));
+                    
+                    podcast.setSourceType("RSS");
+                    podcast.setTitle(feed.getTitle());
+                    podcast.setDescription(feed.getDescription() != null ? feed.getDescription() : "");
+                    podcast.setAuthor(feed.getAuthor());
+                    // Set other fields as needed
+                    
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to parse RSS feed: " + e.getMessage(), e);
                 }
             }
-
-            podcast = podcastRepo.save(podcast);
-            return Optional.of(podcast);
-
+            
+            return Optional.of(podcastRepo.save(podcast));
+            
         } catch (Exception e) {
-            e.printStackTrace();
-            return Optional.empty();
+            throw new RuntimeException("Failed to fetch and save podcast: " + e.getMessage(), e);
         }
-    }
-
-    // --- Helper Methods ---
-
-    private boolean isYouTubeUrl(String url) {
-
-        return url.contains("youtube.com") || url.contains("youtu.be");
     }
 
     private JSONObject fetchYouTubeMetadata(String videoUrl) {
         try {
-            String oembedUrl = "https://www.youtube.com/oembed?url=" + videoUrl + "&format=json";
-            HttpURLConnection connection = (HttpURLConnection) new URL(oembedUrl).openConnection();
-            connection.setRequestMethod("GET");
-            connection.setConnectTimeout(5000);
-            connection.setReadTimeout(5000);
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("https://www.youtube.com/oembed?url=" + videoUrl + "&format=json"))
+                .header("Accept", "application/json")
+                .build();
 
-            if (connection.getResponseCode() == 200) {
-                String jsonText = new String(connection.getInputStream().readAllBytes());
-                return new JSONObject(jsonText);
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            
+            if (response.statusCode() != 200) {
+                throw new RuntimeException("Failed to fetch YouTube metadata. HTTP error code: " + response.statusCode());
             }
+            
+            return new JSONObject(response.body());
+            
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new RuntimeException("Failed to fetch YouTube metadata: " + e.getMessage(), e);
         }
-        return null;
     }
 
-    public List<Podcast> searchPodcasts(String keyword) {
+    /**
+     * Search podcasts by keyword with pagination support
+     * @param keyword search term
+     * @param pageable pagination information
+     * @return Page containing matching podcasts and pagination info
+     */
+    public Page<Podcast> searchPodcasts(String keyword, Pageable pageable) {
         if (keyword == null || keyword.isBlank()) {
-            return List.of(); 
+            return Page.empty(pageable);
+        }
+        return podcastRepo.search(keyword, pageable);
+    }
+    
+    /**
+     * Search podcasts by keyword without pagination
+     * @param keyword search term
+     * @return List of matching podcasts
+     */
+    public List<Podcast> searchPodcastsList(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return List.of();
         }
         return podcastRepo.search(keyword);
     }
 
     @Transactional
-    public Optional<Podcast> incrementViews(Long id){
-        Optional<Podcast> optionalPodcast = podcastRepo.findById(id);
-        if(optionalPodcast.isPresent()){
-            Podcast podcast = optionalPodcast.get();
+    public Optional<Podcast> incrementViews(Long id) {
+        return podcastRepo.findById(id).map(podcast -> {
             podcast.incrementViews();
-            podcastRepo.save(podcast);
-            return Optional.of(podcast);
+            return podcastRepo.save(podcast);
+        });
+    }
+    
+    /**
+     * Get podcasts by category with pagination
+     * @param category category to filter by
+     * @param pageable pagination information
+     * @return Page of podcasts in the specified category
+     */
+    @Transactional(readOnly = true)
+    public Page<Podcast> getPodcastsByCategory(String category, Pageable pageable) {
+        if (category == null || category.isBlank()) {
+            return Page.empty(pageable);
         }
-        return Optional.empty();
+        return podcastRepo.findByCategoryIgnoreCase(category, pageable);
+    }
+    
+    /**
+     * Get trending podcasts ordered by view count in descending order
+     * @param limit maximum number of podcasts to return
+     * @return List of trending podcasts
+     */
+    @Transactional(readOnly = true)
+    public List<Podcast> getTrendingPodcasts(int limit) {
+        if (limit <= 0) {
+            return Collections.emptyList();
+        }
+        // Use the existing repository method if the limit is 10
+        if (limit == 10) {
+            return podcastRepo.findTop10ByOrderByViewsDesc();
+        }
+        // For other limits, use a custom query with Pageable
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(0, limit);
+        return podcastRepo.findTopNByOrderByViewsDesc(pageable);
     }
 }
